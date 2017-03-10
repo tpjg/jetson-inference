@@ -17,7 +17,7 @@
 
 #include "cudaMappedMemory.h"
 #include "cudaYUV.h"
-
+#include "cudaRGB.h"
 
 
 
@@ -27,8 +27,8 @@ gstCamera::gstCamera()
 	mAppSink    = NULL;
 	mBus        = NULL;
 	mPipeline   = NULL;	
-	mRGBA       = NULL;
-
+	mV4L2Device = -1;
+	
 	mWidth  = 0;
 	mHeight = 0;
 	mDepth  = 0;
@@ -38,6 +38,7 @@ gstCamera::gstCamera()
 	mWaitMutex  = new QMutex();
 	mRingMutex  = new QMutex();
 	
+	mLatestRGBA       = 0;
 	mLatestRingbuffer = 0;
 	mLatestRetrieved  = false;
 	
@@ -45,6 +46,7 @@ gstCamera::gstCamera()
 	{
 		mRingbufferCPU[n] = NULL;
 		mRingbufferGPU[n] = NULL;
+		mRGBA[n]          = NULL;
 	}
 }
 
@@ -62,19 +64,35 @@ bool gstCamera::ConvertRGBA( void* input, void** output )
 	if( !input || !output )
 		return false;
 	
-	if( !mRGBA )
+	if( !mRGBA[0] )
 	{
-		if( CUDA_FAILED(cudaMalloc(&mRGBA, mWidth * mHeight * sizeof(float4))) )
+		for( uint32_t n=0; n < NUM_RINGBUFFERS; n++ )
 		{
-			printf(LOG_CUDA "gstCamera -- failed to allocate memory for %ux%u RGBA texture\n", mWidth, mHeight);
-			return false;
+			if( CUDA_FAILED(cudaMalloc(&mRGBA[n], mWidth * mHeight * sizeof(float4))) )
+			{
+				printf(LOG_CUDA "gstCamera -- failed to allocate memory for %ux%u RGBA texture\n", mWidth, mHeight);
+				return false;
+			}
 		}
+		
+		printf(LOG_CUDA "gstreamer camera -- allocated %u RGBA ringbuffers\n", NUM_RINGBUFFERS);
 	}
 	
-	if( CUDA_FAILED(cudaNV12ToRGBAf((uint8_t*)input, (float4*)mRGBA, mWidth, mHeight)) )
-		return false;
+	if( onboardCamera() )
+	{
+		// onboard camera is NV12
+		if( CUDA_FAILED(cudaNV12ToRGBAf((uint8_t*)input, (float4*)mRGBA[mLatestRGBA], mWidth, mHeight)) )
+			return false;
+	}
+	else
+	{
+		// USB webcam is RGB
+		if( CUDA_FAILED(cudaRGBToRGBAf((uchar3*)input, (float4*)mRGBA[mLatestRGBA], mWidth, mHeight)) )
+			return false;
+	}
 	
-	*output = mRGBA;
+	*output     = mRGBA[mLatestRGBA];
+	mLatestRGBA = (mLatestRGBA + 1) % NUM_RINGBUFFERS;
 	return true;
 }
 
@@ -265,13 +283,19 @@ bool gstCamera::buildLaunchStr()
 	
 //#define CAPS_STR "video/x-raw(memory:NVMM), width=(int)2592, height=(int)1944, format=(string)I420, framerate=(fraction)30/1"
 //#define CAPS_STR "video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080, format=(string)I420, framerate=(fraction)30/1"
-	mWidth     = 1280;
-	mHeight    = 720;
-	mDepth     = 12;
-	mSize      = (mWidth * mHeight * mDepth) / 8;
-	
-	ss << "nvcamerasrc fpsRange=\"30.0 30.0\" ! video/x-raw(memory:NVMM), width=(int)" << mWidth << ", height=(int)" << mHeight << ", format=(string)NV12 ! nvvidconv flip-method=2 ! "; //'video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080, format=(string)I420, framerate=(fraction)30/1' ! ";
-	ss << "video/x-raw ! appsink name=mysink";
+
+	if( onboardCamera() )
+	{
+		ss << "nvcamerasrc fpsRange=\"30.0 30.0\" ! video/x-raw(memory:NVMM), width=(int)" << mWidth << ", height=(int)" << mHeight << ", format=(string)NV12 ! nvvidconv flip-method=2 ! "; //'video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080, format=(string)I420, framerate=(fraction)30/1' ! ";
+		ss << "video/x-raw ! appsink name=mysink";
+	}
+	else
+	{
+		ss << "v4l2src device=/dev/video" << mV4L2Device << " ! ";
+		ss << "video/x-raw, width=(int)" << mWidth << ", height=(int)" << mHeight << ", "; 
+		ss << "format=RGB ! videoconvert ! video/x-raw, format=RGB ! videoconvert !";
+		ss << "appsink name=mysink";
+	}
 	
 	mLaunchStr = ss.str();
 
@@ -282,7 +306,7 @@ bool gstCamera::buildLaunchStr()
 
 
 // Create
-gstCamera* gstCamera::Create()
+gstCamera* gstCamera::Create( uint32_t width, uint32_t height, int v4l2_device )
 {
 	if( !gstreamerInit() )
 	{
@@ -295,6 +319,12 @@ gstCamera* gstCamera::Create()
 	if( !cam )
 		return NULL;
 	
+	cam->mV4L2Device = v4l2_device;
+	cam->mWidth      = width;
+	cam->mHeight     = height;
+	cam->mDepth      = cam->onboardCamera() ? 12 : 24;	// NV12 or RGB
+	cam->mSize       = (width * height * cam->mDepth) / 8;
+
 	if( !cam->init() )
 	{
 		printf(LOG_GSTREAMER "failed to init gstCamera\n");
@@ -302,6 +332,13 @@ gstCamera* gstCamera::Create()
 	}
 	
 	return cam;
+}
+
+
+// Create
+gstCamera* gstCamera::Create( int v4l2_device )
+{
+	return Create( DefaultWidth, DefaultHeight, v4l2_device );
 }
 
 

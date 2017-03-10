@@ -20,12 +20,15 @@ tensorNet::tensorNet()
 	mInfer   = NULL;
 	mContext = NULL;
 	
-	mWidth      = 0;
-	mHeight     = 0;
-	mInputSize  = 0;
-	mInputCPU   = NULL;
-	mInputCUDA  = NULL;
-	mEnableFP16 = false;
+	mWidth          = 0;
+	mHeight         = 0;
+	mInputSize      = 0;
+	mInputCPU       = NULL;
+	mInputCUDA      = NULL;
+	mEnableDebug    = false;
+	mEnableProfiler = false;
+	mEnableFP16     = false;
+	mOverride16     = false;
 
 	memset(&mInputDims, 0, sizeof(nvinfer1::Dims3));
 }
@@ -48,6 +51,30 @@ tensorNet::~tensorNet()
 }
 
 
+// EnableProfiler
+void tensorNet::EnableProfiler()
+{
+	mEnableProfiler = true;
+
+	if( mContext != NULL )
+		mContext->setProfiler(&gProfiler);
+}
+
+
+// EnableDebug
+void tensorNet::EnableDebug()
+{
+	mEnableDebug = true;
+}
+
+
+// DisableFP16 (i.e. for debugging or unsupported network)
+void tensorNet::DisableFP16()
+{
+	mOverride16 = true;
+}
+
+
 // Create an optimized GIE network from caffe prototxt and model file
 bool tensorNet::ProfileModel(const std::string& deployFile,			   // name for caffe prototxt
 					         const std::string& modelFile,			   // name for model 
@@ -59,13 +86,14 @@ bool tensorNet::ProfileModel(const std::string& deployFile,			   // name for caf
 	nvinfer1::IBuilder* builder = createInferBuilder(gLogger);
 	nvinfer1::INetworkDefinition* network = builder->createNetwork();
 
+	builder->setDebugSync(mEnableDebug);
 	builder->setMinFindIterations(3);	// allow time for TX1 GPU to spin up
      builder->setAverageFindIterations(2);
 
 	// parse the caffe model to populate the network, then set the outputs
 	nvcaffeparser1::ICaffeParser* parser = nvcaffeparser1::createCaffeParser();
 
-	mEnableFP16 = builder->platformHasFastFp16();
+	mEnableFP16 = (mOverride16 == true) ? false : builder->platformHasFastFp16();
 	printf(LOG_GIE "platform %s FP16 support.\n", mEnableFP16 ? "has" : "does not have");
 	printf(LOG_GIE "loading %s %s\n", deployFile.c_str(), modelFile.c_str());
 	
@@ -86,8 +114,16 @@ bool tensorNet::ProfileModel(const std::string& deployFile,			   // name for caf
 	const size_t num_outputs = outputs.size();
 	
 	for( size_t n=0; n < num_outputs; n++ )
-		network->markOutput(*blobNameToTensor->find(outputs[n].c_str()));
+	{
+		nvinfer1::ITensor* tensor = blobNameToTensor->find(outputs[n].c_str());
+	
+		if( !tensor )
+			printf(LOG_GIE "failed to retrieve tensor for output '%s'\n", outputs[n].c_str());
+		else
+			printf(LOG_GIE "retrieved output tensor '%s'\n", tensor->getName());
 
+		network->markOutput(*tensor);
+	}
 
 	// Build the engine
 	printf(LOG_GIE "configuring CUDA engine\n");
@@ -107,6 +143,8 @@ bool tensorNet::ProfileModel(const std::string& deployFile,			   // name for caf
 		printf(LOG_GIE "failed to build CUDA engine\n");
 		return false;
 	}
+
+	printf(LOG_GIE "completed building CUDA engine\n");
 
 	// we don't need the network any more, and we can destroy the parser
 	network->destroy();
@@ -178,7 +216,7 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 		
 		if( builder != NULL )
 		{
-			mEnableFP16 = builder->platformHasFastFp16();
+			mEnableFP16 = !mOverride16 && builder->platformHasFastFp16();
 			printf(LOG_GIE "platform %s FP16 support.\n", mEnableFP16 ? "has" : "does not have");
 			builder->destroy();	
 		}
@@ -214,6 +252,15 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 		printf(LOG_GIE "failed to create execution context\n");
 		return 0;
 	}
+
+	if( mEnableDebug )
+	{
+		printf(LOG_GIE "enabling context debug sync.\n");
+		context->setDebugSync(true);
+	}
+
+	if( mEnableProfiler )
+		context->setProfiler(&gProfiler);
 
 	printf(LOG_GIE "CUDA engine context initialized with %u bindings\n", engine->getNbBindings());
 	
