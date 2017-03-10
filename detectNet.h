@@ -62,7 +62,8 @@ public:
 	 * @returns True if the image was processed without error, false if an error was encountered.
 	 */
 	bool Detect( float* rgba, uint32_t width, uint32_t height, float* boundingBoxes, int* numBoxes, float* confidence=NULL );
-	
+  bool DetectChar( char* rgba, uint32_t width, uint32_t height, float* boundingBoxes, int* numBoxes, float* confidence=NULL );
+
 	/**
 	 * Draw bounding boxes in the RGBA image.
 	 * @param input float4 RGBA input image in CUDA device memory.

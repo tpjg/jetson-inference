@@ -57,10 +57,10 @@ __global__ void yuyvToRgba( uchar4* src, int srcAlignedWidth, uchar8* dst, int d
 
 	// Y0 is the brightness of pixel 0, Y1 the brightness of pixel 1.
 	// U0 and V0 is the color of both pixels.
-	// UYVY [ U0 | Y0 | V0 | Y1 ] 
+	// UYVY [ U0 | Y0 | V0 | Y1 ]
 	// YUYV [ Y0 | U0 | Y1 | V0 ]
 	const float y0 = formatUYVY ? macroPx.y : macroPx.x;
-	const float y1 = formatUYVY ? macroPx.w : macroPx.z; 
+	const float y1 = formatUYVY ? macroPx.w : macroPx.z;
 	const float u = (formatUYVY ? macroPx.x : macroPx.y) - 128.0f;
 	const float v = (formatUYVY ? macroPx.z : macroPx.w) - 128.0f;
 
@@ -72,7 +72,7 @@ __global__ void yuyvToRgba( uchar4* src, int srcAlignedWidth, uchar8* dst, int d
 							  y1 - 0.3455f * u - 0.7169f * v,
 							  y1 + 1.7790f * u, 255.0f );
 
-	dst[y * dstAlignedWidth + x] = make_uchar8( clamp(px0.x, 0.0f, 255.0f), 
+	dst[y * dstAlignedWidth + x] = make_uchar8( clamp(px0.x, 0.0f, 255.0f),
 									    clamp(px0.y, 0.0f, 255.0f),
 									    clamp(px0.z, 0.0f, 255.0f),
 									    clamp(px0.w, 0.0f, 255.0f),
@@ -80,7 +80,7 @@ __global__ void yuyvToRgba( uchar4* src, int srcAlignedWidth, uchar8* dst, int d
 									    clamp(px1.y, 0.0f, 255.0f),
 									    clamp(px1.z, 0.0f, 255.0f),
 									    clamp(px1.w, 0.0f, 255.0f) );
-} 
+}
 
 template<bool formatUYVY>
 cudaError_t launchYUYV( uchar2* input, size_t inputPitch, uchar4* output, size_t outputPitch, size_t width, size_t height)
@@ -94,7 +94,7 @@ cudaError_t launchYUYV( uchar2* input, size_t inputPitch, uchar4* output, size_t
 	const int srcAlignedWidth = inputPitch / sizeof(uchar4);	// normally would be uchar2, but we're doubling up pixels
 	const int dstAlignedWidth = outputPitch / sizeof(uchar8);	// normally would be uchar4 ^^^
 
-	//printf("yuyvToRgba %zu %zu %i %i %i %i %i\n", width, height, (int)formatUYVY, srcAlignedWidth, dstAlignedWidth, grid.x, grid.y);
+	printf("yuyvToRgba %zu %zu %i %i %i %i %i\n", width, height, (int)formatUYVY, srcAlignedWidth, dstAlignedWidth, grid.x, grid.y);
 
 	yuyvToRgba<formatUYVY><<<grid, block>>>((uchar4*)input, srcAlignedWidth, (uchar8*)output, dstAlignedWidth, width, height);
 
@@ -109,6 +109,7 @@ cudaError_t cudaUYVYToRGBA( uchar2* input, uchar4* output, size_t width, size_t 
 
 cudaError_t cudaUYVYToRGBA( uchar2* input, size_t inputPitch, uchar4* output, size_t outputPitch, size_t width, size_t height )
 {
+  printf("cudaUYVYToRGBA(%p,%d,%p,%d,%d,%d)\n", input, inputPitch, output, outputPitch, width,height);
 	return launchYUYV<true>(input, inputPitch, output, outputPitch, width, height);
 }
 
@@ -139,10 +140,10 @@ __global__ void yuyvToGray( uchar4* src, int srcAlignedWidth, float2* dst, int d
 	const uchar4 macroPx = src[y * srcAlignedWidth + x];
 
 	const float y0 = formatUYVY ? macroPx.y : macroPx.x;
-	const float y1 = formatUYVY ? macroPx.w : macroPx.z; 
+	const float y1 = formatUYVY ? macroPx.w : macroPx.z;
 
 	dst[y * dstAlignedWidth + x] = make_float2(y0/255.0f, y1/255.0f);
-} 
+}
 
 template<bool formatUYVY>
 cudaError_t launchGrayYUYV( uchar2* input, size_t inputPitch, float* output, size_t outputPitch, size_t width, size_t height)
@@ -180,4 +181,3 @@ cudaError_t cudaYUYVToGray( uchar2* input, size_t inputPitch, float* output, siz
 {
 	return launchGrayYUYV<false>(input, inputPitch, output, outputPitch, width, height);
 }
-
